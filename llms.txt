@@ -1,0 +1,17 @@
+# BucketsOfPower
+
+Client-only FIT cycling power-balance analyzer. Selected FIT/FIT.GZ files stay in memory in the browser; there is no backend, analytics, storage, or network connection. The page sets `connect-src 'none'`.
+
+## Agent interface
+
+- File input: `#fit-upload` (`[data-testid="fit-upload"]`), multiple FIT and gzip files. Use Playwright `setInputFiles` directly; the input is always attached to the DOM.
+- Current result: `#bop-state` JSON script, matching the analysis result shape: `total_datapoints`, `overall_left_pct`, `overall_right_pct`, `buckets`, `files_analyzed`, `sample_seconds`, mode parameters, and optional `message`.
+- Browser API: `window.bucketsOfPower.loadFiles(File[])`, `setOptions(opts)`, `selectWorkouts(ids)`, `drillDown(axis, lo, hi)`, `getResult()`, and `getWorkouts()`.
+- Stable selectors include `[data-testid="group-by-power"]`, `[data-testid="group-by-time"]`, `[data-testid="min-watts"]`, `[data-testid="max-watts"]`, `[data-testid="bucket-size"]`, `[data-testid="min-datapoints"]`, `[data-testid="sample-seconds"]`, `[data-testid="workout-checkbox"]`, and `[data-testid="bucket-row"]`.
+- Bucket rows expose `data-bucket-lo`, `data-bucket-hi`, and `data-axis` (`power` or `time`). A polite live status is available at `[role="status"]`.
+
+## URL options
+
+Options are synchronized into the URL hash: `group_by`, `bucket_size`, `time_bucket_minutes`, `min_watts`, `max_watts`, `min_datapoints`, `sample_seconds`, `min_minute`, and `max_minute`. Selected local files cannot be shared through the URL. Defaults: power grouping, 25 W buckets, 30-minute time buckets, 30 minimum datapoints, and 1 second per sample.
+
+The time-window filter on power grouping is a web-app drill-down extension. Time buckets use elapsed wall-clock timestamps from each ride's own first timestamp, including paused time.
