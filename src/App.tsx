@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { analyze } from './analysis';
 import About from './About.tsx';
+import { loadSampleWorkouts } from './sample';
 import type { AnalysisOptions, AnalysisResult, GroupBy, WorkoutSummary } from './types';
 
 const DEFAULTS: AnalysisOptions = {
@@ -70,9 +71,20 @@ export default function App() {
   const [status, setStatus] = useState('Ready. Files are analyzed locally in this browser.');
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [showingSample, setShowingSample] = useState(true);
+  const sampleActive = useRef(true);
+  const leaveSample = () => { sampleActive.current = false; setShowingSample(false); };
   const selectedCount = workouts.filter((workout) => workout.selected && !workout.error).length;
   const result = useMemo(() => analyze(workouts, options), [workouts, options]);
   const darkMode = themePreference === 'system' ? systemPrefersDark : themePreference === 'dark';
+
+  useEffect(() => {
+    void loadSampleWorkouts().then((samples) => {
+      if (!sampleActive.current) return;
+      setWorkouts(samples);
+      setStatus(`Showing ${samples.length} sample rides. Load your own FIT files to replace them.`);
+    });
+  }, []);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -134,7 +146,9 @@ export default function App() {
           selected: !entry.error, ...(entry.error ? { error: entry.error } : {}),
         } satisfies WorkoutSummary;
       });
-      setWorkouts((current) => [...current, ...added]);
+      const replaceSample = sampleActive.current;
+      leaveSample();
+      setWorkouts((current) => replaceSample ? added : [...current, ...added]);
       const failed = added.filter((item) => item.error).length;
       setStatus(`${added.length - failed} file${added.length - failed === 1 ? '' : 's'} loaded${failed ? `; ${failed} file${failed === 1 ? '' : 's'} could not be parsed` : ''}.`);
     } catch (error) {
@@ -224,7 +238,7 @@ export default function App() {
 
     <div className="workspace">
       <aside className="sidebar" aria-label="Workout files">
-        <div className="section-heading"><div><p className="eyebrow">YOUR LIBRARY</p><h2>Workouts <span className="count-pill">{workouts.length}</span></h2></div><button className="icon-button" data-testid="remove-all" aria-label="Remove all workouts" title="Remove all" disabled={!workouts.length} onClick={() => setWorkouts([])}>×</button></div>
+        <div className="section-heading"><div><p className="eyebrow">YOUR LIBRARY</p><h2>Workouts <span className="count-pill">{workouts.length}</span></h2>{showingSample && workouts.length > 0 && <p className="sample-note">Sample data. Loading your files replaces it.</p>}</div><button className="icon-button" data-testid="remove-all" aria-label="Remove all workouts" title="Remove all" disabled={!workouts.length} onClick={() => { leaveSample(); setWorkouts([]); }}>×</button></div>
         <div className={`dropzone ${dragging ? 'is-dragging' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={handleDrop}>
           <div className="upload-icon" aria-hidden="true">↑</div><strong>Drop your FIT files here</strong><span>or choose files from your device</span>
           <label className="button button-primary upload-button" htmlFor="fit-upload">Choose files</label>
@@ -235,7 +249,7 @@ export default function App() {
         <div className="workout-list">
           {!workouts.length && <div className="library-empty"><div className="empty-stack" aria-hidden="true"><span /><span /><span /></div><strong>Your rides live here</strong><p>Load one or more FIT files to start exploring your left/right power balance.</p></div>}
           {workouts.map((workout) => <article className={`workout-card ${workout.error ? 'has-error' : ''}`} key={workout.id}>
-            <div className="workout-card-top"><label className="check-wrap"><input type="checkbox" data-testid="workout-checkbox" data-workout-id={workout.id} aria-label={`Include ${workout.name}`} checked={workout.selected} disabled={!!workout.error} onChange={(event) => setWorkouts((items) => items.map((item) => item.id === workout.id ? { ...item, selected: event.target.checked } : item))} /><span className="custom-check" /></label><div className="workout-name"><strong title={workout.name}>{workout.name}</strong><span>{formatDate(workout.date)}</span></div><button className="icon-button card-remove" data-testid="remove-workout" aria-label={`Remove ${workout.name}`} onClick={() => removeWorkout(workout.id)}>×</button></div>
+            <div className="workout-card-top"><label className="check-wrap"><input type="checkbox" data-testid="workout-checkbox" data-workout-id={workout.id} aria-label={`Include ${workout.name}`} checked={workout.selected} disabled={!!workout.error} onChange={(event) => setWorkouts((items) => items.map((item) => item.id === workout.id ? { ...item, selected: event.target.checked } : item))} /><span className="custom-check" /></label><div className="workout-name"><strong>{formatDate(workout.date)}</strong><span title={workout.name}>{workout.name}</span></div><button className="icon-button card-remove" data-testid="remove-workout" aria-label={`Remove ${workout.name}`} onClick={() => removeWorkout(workout.id)}>×</button></div>
             {workout.error ? <p className="error-copy">Could not parse: {workout.error}</p> : <><div className="workout-stats"><div><span>Duration</span><strong>{formatDuration(workout.durationSeconds)}</strong></div><div><span>Distance</span><strong>{workout.distanceMeters == null ? '—' : `${(workout.distanceMeters / 1000).toFixed(1)} km`}</strong></div><div><span>Avg power</span><strong>{workout.averagePower == null ? '—' : `${Math.round(workout.averagePower)} W`}</strong></div></div>{!workout.hasBalance && <span className="no-balance">No L/R data</span>}</>}
           </article>)}
         </div>
