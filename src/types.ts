@@ -4,9 +4,11 @@ export interface DataPoint {
   timestamp: number | null;
   power: number | null;
   leftRightBalance: number | null;
-  distance: number | null;
-  heartRate?: number | null;
   cadence?: number | null;
+  leftPowerPhase?: number[] | null;
+  leftPowerPhasePeak?: number[] | null;
+  rightPowerPhase?: number[] | null;
+  rightPowerPhasePeak?: number[] | null;
 }
 
 export interface WorkoutSummary {

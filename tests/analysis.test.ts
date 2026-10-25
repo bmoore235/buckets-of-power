@@ -7,7 +7,7 @@ const options: AnalysisOptions = {
   min_datapoints: 1, sample_seconds: 1, min_minute: null, max_minute: null,
 };
 function point(power: number | null, balance: number | null, seconds = 0): DataPoint {
-  return { timestamp: Date.UTC(2026, 0, 1) + seconds * 1000, power, leftRightBalance: balance, distance: null };
+  return { timestamp: Date.UTC(2026, 0, 1) + seconds * 1000, power, leftRightBalance: balance };
 }
 function workout(points: DataPoint[]): WorkoutSummary {
   return { id: 'ride', name: 'ride.fit', date: null, durationSeconds: null, distanceMeters: null, averagePower: null, points, hasBalance: true, selected: true };

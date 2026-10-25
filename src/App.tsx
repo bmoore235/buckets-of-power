@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { analyze } from './analysis';
 import About from './About.tsx';
 import { loadSampleWorkouts } from './sample';
+import { loadStoredWorkouts, syncStoredWorkouts } from './storage';
 import type { AnalysisOptions, AnalysisResult, GroupBy, WorkoutSummary } from './types';
 
 const DEFAULTS: AnalysisOptions = {
@@ -73,18 +74,47 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [showingSample, setShowingSample] = useState(true);
   const sampleActive = useRef(true);
+  const [hydrated, setHydrated] = useState(false);
+  const storedIds = useRef(new Set<string>());
+  const writeQueue = useRef(Promise.resolve());
   const leaveSample = () => { sampleActive.current = false; setShowingSample(false); };
   const selectedCount = workouts.filter((workout) => workout.selected && !workout.error).length;
   const result = useMemo(() => analyze(workouts, options), [workouts, options]);
   const darkMode = themePreference === 'system' ? systemPrefersDark : themePreference === 'dark';
 
   useEffect(() => {
-    void loadSampleWorkouts().then((samples) => {
-      if (!sampleActive.current) return;
-      setWorkouts(samples);
-      setStatus(`Showing ${samples.length} sample rides. Load your own FIT files to replace them.`);
-    });
+    void (async () => {
+      let stored: WorkoutSummary[] = [];
+      try { stored = await loadStoredWorkouts(); } catch { /* Storage unavailable; continue without a cache. */ }
+      if (stored.length) {
+        // Keep anything loaded while hydrating, ahead of older cached rides.
+        sampleActive.current = false;
+        setShowingSample(false);
+        storedIds.current = new Set(stored.map((workout) => workout.id));
+        setWorkouts((current) => [...stored, ...current.filter((item) => !storedIds.current.has(item.id) && !item.id.startsWith('sample-'))]);
+        setStatus(`Restored ${stored.length} saved ride${stored.length === 1 ? '' : 's'} from this browser.`);
+      } else if (sampleActive.current) {
+        const samples = await loadSampleWorkouts();
+        if (sampleActive.current) {
+          setWorkouts(samples);
+          setStatus(`Showing ${samples.length} sample rides. Load your own FIT files to replace them.`);
+        }
+      }
+      setHydrated(true);
+    })();
   }, []);
+
+  useEffect(() => {
+    if (!hydrated || showingSample) return;
+    const persistable = workouts.filter((workout) => !workout.error);
+    writeQueue.current = writeQueue.current.then(async () => {
+      const previous = storedIds.current;
+      try {
+        await syncStoredWorkouts(persistable, previous);
+        storedIds.current = new Set(persistable.map((workout) => workout.id));
+      } catch { /* Cache is best-effort. */ }
+    });
+  }, [workouts, hydrated, showingSample]);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');

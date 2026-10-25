@@ -25,6 +25,10 @@ function numeric(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function phase(value: unknown): number[] | null {
+  return Array.isArray(value) && value.length && value.every((item) => typeof item === 'number') ? value : null;
+}
+
 export async function decodeFit(input: ArrayBuffer | Uint8Array): Promise<DecodedWorkout> {
   const compressedBytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const bytes = await inflateIfGzip(compressedBytes);
@@ -40,10 +44,14 @@ export async function decodeFit(input: ArrayBuffer | Uint8Array): Promise<Decode
     power: numeric(record.power),
     // FIT's leftRightBalance field is the raw encoded byte (bit 7 identifies the right share).
     leftRightBalance: numeric(record.leftRightBalance),
-    distance: numeric(record.distance),
-    heartRate: numeric(record.heartRate),
     cadence: numeric(record.cadence),
+    leftPowerPhase: phase(record.leftPowerPhase),
+    leftPowerPhasePeak: phase(record.leftPowerPhasePeak),
+    rightPowerPhase: phase(record.rightPowerPhase),
+    rightPowerPhasePeak: phase(record.rightPowerPhasePeak),
   }));
+  const distances = (messagesTyped.recordMesgs ?? []).flatMap((record) => numeric(record.distance) ?? []);
+  const lastDistance = distances.at(-1) ?? null;
   const session = messagesTyped.sessionMesgs?.at(-1);
   const timestamped = points.filter((point) => point.timestamp != null);
   const first = timestamped[0];
@@ -53,7 +61,7 @@ export async function decodeFit(input: ArrayBuffer | Uint8Array): Promise<Decode
     points,
     session: {
       durationSeconds: numeric(session?.totalTimerTime) ?? (first?.timestamp != null && last?.timestamp != null ? Math.max(0, (last.timestamp - first.timestamp) / 1000) : null),
-      distanceMeters: numeric(session?.totalDistance) ?? last?.distance ?? null,
+      distanceMeters: numeric(session?.totalDistance) ?? lastDistance,
       averagePower: numeric(session?.avgPower) ?? (powered.length ? powered.reduce((sum, value) => sum + value, 0) / powered.length : null),
     },
   };

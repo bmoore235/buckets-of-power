@@ -22,7 +22,7 @@ export async function loadSampleWorkouts(): Promise<WorkoutSummary[]> {
       durationSeconds: ride.durationSeconds,
       distanceMeters: ride.distanceMeters,
       averagePower: ride.averagePower,
-      points: ride.t.map((t, i) => ({ timestamp: startMs + t * 1000, power: ride.p[i], leftRightBalance: ride.b[i], distance: null })),
+      points: ride.t.map((t, i) => ({ timestamp: startMs + t * 1000, power: ride.p[i], leftRightBalance: ride.b[i] })),
       hasBalance: true,
       selected: true,
     } satisfies WorkoutSummary;
