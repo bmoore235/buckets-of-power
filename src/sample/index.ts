@@ -5,9 +5,14 @@ interface SampleRide {
   durationSeconds: number;
   distanceMeters: number;
   averagePower: number;
-  t: number[];
-  p: number[];
-  b: number[];
+  t: (number | null)[];
+  p: (number | null)[];
+  b: (number | null)[];
+  c?: (number | null)[];
+  lp?: (number[] | null)[];
+  lpp?: (number[] | null)[];
+  rp?: (number[] | null)[];
+  rpp?: (number[] | null)[];
 }
 
 export async function loadSampleWorkouts(): Promise<WorkoutSummary[]> {
@@ -22,8 +27,17 @@ export async function loadSampleWorkouts(): Promise<WorkoutSummary[]> {
       durationSeconds: ride.durationSeconds,
       distanceMeters: ride.distanceMeters,
       averagePower: ride.averagePower,
-      points: ride.t.map((t, i) => ({ timestamp: startMs + t * 1000, power: ride.p[i], leftRightBalance: ride.b[i] })),
-      hasBalance: true,
+      points: ride.t.map((t, i) => ({
+        timestamp: t == null ? null : startMs + t * 1000,
+        power: ride.p[i],
+        leftRightBalance: ride.b[i],
+        cadence: ride.c?.[i] ?? null,
+        leftPowerPhase: ride.lp?.[i] ?? null,
+        leftPowerPhasePeak: ride.lpp?.[i] ?? null,
+        rightPowerPhase: ride.rp?.[i] ?? null,
+        rightPowerPhasePeak: ride.rpp?.[i] ?? null,
+      })),
+      hasBalance: ride.b.some((balance) => balance != null),
       selected: true,
     } satisfies WorkoutSummary;
   });

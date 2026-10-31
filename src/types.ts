@@ -1,4 +1,4 @@
-export type GroupBy = 'power' | 'time';
+export type GroupBy = 'power' | 'time' | 'cadence';
 
 export interface DataPoint {
   timestamp: number | null;
@@ -28,6 +28,7 @@ export interface AnalysisOptions {
   group_by: GroupBy;
   bucket_size: number;
   time_bucket_minutes: number;
+  cadence_bucket_size: number;
   min_watts: number | null;
   max_watts: number | null;
   min_datapoints: number;
@@ -39,6 +40,9 @@ export interface AnalysisOptions {
 export interface BucketRow {
   watts?: [number, number];
   minutes?: [number, number];
+  rpm?: [number, number];
+  avg_power: number | null;
+  avg_cadence: number | null;
   left_pct: number | null;
   right_pct: number | null;
   datapoints: number;
@@ -55,6 +59,7 @@ export interface AnalysisResult {
   total_duration?: string;
   bucket_size?: number;
   time_bucket_minutes?: number;
+  cadence_bucket_size?: number;
   watts_filter?: [number | null, number | null];
   message?: string;
 }

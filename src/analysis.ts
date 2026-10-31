@@ -1,7 +1,7 @@
 import type { AnalysisOptions, AnalysisResult, DataPoint, GroupBy, WorkoutSummary } from './types';
 
 const NO_BUCKETS = 'No buckets matched. Records need power plus left/right balance (dual-sided power meter), and the watt range / min_datapoints filters may be too strict.';
-type Totals = { left: number; right: number; count: number; range: [number, number] };
+type Totals = { left: number; right: number; count: number; range: [number, number]; powerSum: number; cadenceSum: number; cadenceCount: number };
 
 function roundHalfEven(value: number, decimals = 1): number {
   const factor = 10 ** decimals;
@@ -37,12 +37,18 @@ function split(point: DataPoint) {
   return { left: values.left_watts!, right: values.right_watts! };
 }
 
-function add(map: Map<string, Totals>, lower: number, upper: number, values: { left: number; right: number }) {
+function emptyBucket(lower: number, upper: number): Totals {
+  return { left: 0, right: 0, count: 0, range: [lower, upper], powerSum: 0, cadenceSum: 0, cadenceCount: 0 };
+}
+
+function add(map: Map<string, Totals>, lower: number, upper: number, values: { left: number; right: number }, point: DataPoint) {
   const key = `${lower}:${upper}`;
-  const bucket = map.get(key) ?? { left: 0, right: 0, count: 0, range: [lower, upper] };
+  const bucket = map.get(key) ?? emptyBucket(lower, upper);
   bucket.left += values.left;
   bucket.right += values.right;
   bucket.count++;
+  bucket.powerSum += point.power!;
+  if (point.cadence != null) { bucket.cadenceSum += point.cadence; bucket.cadenceCount++; }
   map.set(key, bucket);
 }
 
@@ -64,12 +70,12 @@ export function bucketByPower(workouts: WorkoutSummary[], options: AnalysisOptio
       }
       const index = Math.floor(point.power! / options.bucket_size);
       highest = Math.max(highest, index);
-      add(map, index * options.bucket_size, (index + 1) * options.bucket_size, values);
+      add(map, index * options.bucket_size, (index + 1) * options.bucket_size, values, point);
     }
   }
   for (let i = 0; i <= highest; i++) {
     const key = `${i * options.bucket_size}:${(i + 1) * options.bucket_size}`;
-    if (!map.has(key)) map.set(key, { left: 0, right: 0, count: 0, range: [i * options.bucket_size, (i + 1) * options.bucket_size] });
+    if (!map.has(key)) map.set(key, emptyBucket(i * options.bucket_size, (i + 1) * options.bucket_size));
   }
   return [...map.values()].sort((a, b) => a.range[0] - b.range[0]);
 }
@@ -87,7 +93,23 @@ export function bucketByTime(workouts: WorkoutSummary[], options: AnalysisOption
       if ((options.min_watts != null && power < options.min_watts) || (options.max_watts != null && power >= options.max_watts)) continue;
       const index = Math.floor((point.timestamp - start) / (options.time_bucket_minutes * 60000));
       if (index < 0) continue;
-      add(map, index * options.time_bucket_minutes, (index + 1) * options.time_bucket_minutes, values);
+      add(map, index * options.time_bucket_minutes, (index + 1) * options.time_bucket_minutes, values, point);
+    }
+  }
+  return [...map.values()].sort((a, b) => a.range[0] - b.range[0]);
+}
+
+export function bucketByCadence(workouts: WorkoutSummary[], options: AnalysisOptions): Bucket[] {
+  if (!Number.isInteger(options.cadence_bucket_size) || options.cadence_bucket_size <= 0) throw new RangeError('cadence_bucket_size must be a positive integer');
+  const map = new Map<string, Totals>();
+  for (const workout of workouts) {
+    for (const point of workout.points) {
+      const values = split(point);
+      if (!values || point.cadence == null || point.cadence < 0) continue;
+      const power = point.power!;
+      if ((options.min_watts != null && power < options.min_watts) || (options.max_watts != null && power >= options.max_watts)) continue;
+      const index = Math.floor(point.cadence / options.cadence_bucket_size);
+      add(map, index * options.cadence_bucket_size, (index + 1) * options.cadence_bucket_size, values, point);
     }
   }
   return [...map.values()].sort((a, b) => a.range[0] - b.range[0]);
@@ -102,7 +124,9 @@ function summarize(buckets: Bucket[], groupBy: GroupBy, sampleSeconds: number) {
   const rows = buckets.map((bucket) => {
     const total = bucket.left + bucket.right;
     return {
-      [groupBy === 'power' ? 'watts' : 'minutes']: bucket.range,
+      [groupBy === 'power' ? 'watts' : groupBy === 'cadence' ? 'rpm' : 'minutes']: bucket.range,
+      avg_power: bucket.count ? roundHalfEven(bucket.powerSum / bucket.count) : null,
+      avg_cadence: bucket.cadenceCount ? roundHalfEven(bucket.cadenceSum / bucket.cadenceCount) : null,
       left_pct: total ? roundPercent(bucket.left / total * 100) : null,
       right_pct: total ? roundPercent(bucket.right / total * 100) : null,
       datapoints: bucket.count,
@@ -118,7 +142,7 @@ function summarize(buckets: Bucket[], groupBy: GroupBy, sampleSeconds: number) {
 export function analyze(workouts: WorkoutSummary[], options: AnalysisOptions): AnalysisResult {
   if (!Number.isInteger(options.sample_seconds) || options.sample_seconds < 1) throw new RangeError('sample_seconds must be a positive integer');
   const selected = workouts.filter((workout) => workout.selected && !workout.error);
-  let buckets = options.group_by === 'time' ? bucketByTime(selected, options) : bucketByPower(selected, options);
+  let buckets = options.group_by === 'time' ? bucketByTime(selected, options) : options.group_by === 'cadence' ? bucketByCadence(selected, options) : bucketByPower(selected, options);
   if (options.group_by === 'power') {
     buckets = buckets.filter(({ range, count }) => (options.min_watts == null || range[1] > options.min_watts) && (options.max_watts == null || range[0] < options.max_watts) && count >= Math.max(options.min_datapoints, 1));
   } else buckets = buckets.filter(({ count }) => count >= Math.max(options.min_datapoints, 1));
@@ -133,7 +157,10 @@ export function analyze(workouts: WorkoutSummary[], options: AnalysisOptions): A
     total_duration: formatDuration(summary.total_datapoints * options.sample_seconds),
   };
   if (options.group_by === 'power') result.bucket_size = options.bucket_size;
-  else {
+  else if (options.group_by === 'cadence') {
+    result.cadence_bucket_size = options.cadence_bucket_size;
+    if (options.min_watts != null || options.max_watts != null) result.watts_filter = [options.min_watts, options.max_watts];
+  } else {
     result.time_bucket_minutes = options.time_bucket_minutes;
     if (options.min_watts != null || options.max_watts != null) result.watts_filter = [options.min_watts, options.max_watts];
   }

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { analyze } from './analysis';
 import About from './About.tsx';
+import PowerPhaseChart, { describeFilter, type PinnedPhases } from './PowerPhaseChart';
+import { computePhases } from './phases';
 import { loadSampleWorkouts } from './sample';
 import { loadStoredWorkouts, syncStoredWorkouts } from './storage';
 import type { AnalysisOptions, AnalysisResult, GroupBy, WorkoutSummary } from './types';
 
 const DEFAULTS: AnalysisOptions = {
-  group_by: 'power', bucket_size: 25, time_bucket_minutes: 30, min_watts: null, max_watts: null,
+  group_by: 'power', bucket_size: 25, time_bucket_minutes: 30, cadence_bucket_size: 10, min_watts: null, max_watts: null,
   min_datapoints: 30, sample_seconds: 1, min_minute: null, max_minute: null,
 };
 const NO_BUCKETS = 'No buckets matched. Records need power plus left/right balance (dual-sided power meter), and the watt range / min_datapoints filters may be too strict.';
@@ -20,8 +22,9 @@ function readOptionsFromHash(): AnalysisOptions {
     return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
   };
   return {
-    group_by: params.get('group_by') === 'time' ? 'time' : DEFAULTS.group_by,
+    group_by: params.get('group_by') === 'time' ? 'time' : params.get('group_by') === 'cadence' ? 'cadence' : DEFAULTS.group_by,
     bucket_size: number('bucket_size', DEFAULTS.bucket_size, 1)!,
+    cadence_bucket_size: number('cadence_bucket_size', DEFAULTS.cadence_bucket_size, 1)!,
     time_bucket_minutes: number('time_bucket_minutes', DEFAULTS.time_bucket_minutes, 1)!,
     min_watts: number('min_watts', null), max_watts: number('max_watts', null),
     min_datapoints: number('min_datapoints', DEFAULTS.min_datapoints, 1)!, sample_seconds: number('sample_seconds', DEFAULTS.sample_seconds, 1)!,
@@ -80,6 +83,9 @@ export default function App() {
   const leaveSample = () => { sampleActive.current = false; setShowingSample(false); };
   const selectedCount = workouts.filter((workout) => workout.selected && !workout.error).length;
   const result = useMemo(() => analyze(workouts, options), [workouts, options]);
+  const phases = useMemo(() => computePhases(workouts, options), [workouts, options]);
+  const phaseLabel = describeFilter(options, workouts.filter((workout) => workout.selected && !workout.error).length);
+  const [pinnedPhases, setPinnedPhases] = useState<PinnedPhases | null>(null);
   const darkMode = themePreference === 'system' ? systemPrefersDark : themePreference === 'dark';
 
   useEffect(() => {
@@ -190,6 +196,7 @@ export default function App() {
   }, []);
 
   const drillDown = useCallback((axis: GroupBy, lo: number, hi: number) => {
+    if (axis === 'cadence') return;
     setTrail((items) => [...items, options]);
     setOptionsState((current) => axis === 'power'
       ? { ...current, group_by: 'time', min_watts: lo, max_watts: hi, min_minute: null, max_minute: null }
@@ -243,10 +250,10 @@ export default function App() {
     setStatus('Drill-down cleared.');
   };
   const exportCsv = () => {
-    const axis = options.group_by === 'power' ? 'watts' : 'minutes';
-    const lines = [['range_start', 'range_end', 'left_pct', 'right_pct', 'datapoints', 'duration'], ...result.buckets.map((row) => {
+    const axis = options.group_by === 'power' ? 'watts' : options.group_by === 'cadence' ? 'rpm' : 'minutes';
+    const lines = [['range_start', 'range_end', 'left_pct', 'right_pct', 'avg_power', 'avg_cadence', 'datapoints', 'duration'], ...result.buckets.map((row) => {
       const range = row[axis];
-      return [range?.[0], range?.[1], row.left_pct, row.right_pct, row.datapoints, row.duration];
+      return [range?.[0], range?.[1], row.left_pct, row.right_pct, row.avg_power, row.avg_cadence, row.datapoints, row.duration];
     })].map((row) => row.map((cell) => cell == null ? '' : String(cell)).join(','));
     const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'buckets-of-power.csv'; anchor.click(); URL.revokeObjectURL(url);
@@ -258,6 +265,9 @@ export default function App() {
   const handleDrop = (event: React.DragEvent) => {
     event.preventDefault(); setDragging(false); void loadFiles(Array.from(event.dataTransfer.files));
   };
+
+  const bucketKey = options.group_by === 'power' ? 'bucket_size' : options.group_by === 'cadence' ? 'cadence_bucket_size' : 'time_bucket_minutes';
+  const bucketValue = options[bucketKey];
 
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">Skip to main content</a>
@@ -278,7 +288,7 @@ export default function App() {
         <div className="library-tools"><span>{selectedCount} selected</span><div><button className="text-button" data-testid="select-all" onClick={() => selectAll(true)}>Select all</button><span className="tool-divider">·</span><button className="text-button" data-testid="clear-selection" onClick={() => selectAll(false)}>Clear</button></div></div>
         <div className="workout-list">
           {!workouts.length && <div className="library-empty"><div className="empty-stack" aria-hidden="true"><span /><span /><span /></div><strong>Your rides live here</strong><p>Load one or more FIT files to start exploring your left/right power balance.</p></div>}
-          {workouts.map((workout) => <article className={`workout-card ${workout.error ? 'has-error' : ''}`} key={workout.id}>
+          {workouts.map((workout) => <article className={`workout-card ${workout.error ? 'has-error' : ''}`} key={workout.id} onClick={(event) => { if (!workout.error && !(event.target as HTMLElement).closest('button, input, label')) setWorkouts((items) => items.map((item) => item.id === workout.id ? { ...item, selected: !item.selected } : item)); }}>
             <div className="workout-card-top"><label className="check-wrap"><input type="checkbox" data-testid="workout-checkbox" data-workout-id={workout.id} aria-label={`Include ${workout.name}`} checked={workout.selected} disabled={!!workout.error} onChange={(event) => setWorkouts((items) => items.map((item) => item.id === workout.id ? { ...item, selected: event.target.checked } : item))} /><span className="custom-check" /></label><div className="workout-name"><strong>{formatDate(workout.date)}</strong><span title={workout.name}>{workout.name}</span></div><button className="icon-button card-remove" data-testid="remove-workout" aria-label={`Remove ${workout.name}`} onClick={() => removeWorkout(workout.id)}>×</button></div>
             {workout.error ? <p className="error-copy">Could not parse: {workout.error}</p> : <><div className="workout-stats"><div><span>Duration</span><strong>{formatDuration(workout.durationSeconds)}</strong></div><div><span>Distance</span><strong>{workout.distanceMeters == null ? '—' : `${(workout.distanceMeters / 1000).toFixed(1)} km`}</strong></div><div><span>Avg power</span><strong>{workout.averagePower == null ? '—' : `${Math.round(workout.averagePower)} W`}</strong></div></div>{!workout.hasBalance && <span className="no-balance">No L/R data</span>}</>}
           </article>)}
@@ -289,11 +299,11 @@ export default function App() {
       <main className="main-panel" id="main-content" tabIndex={-1}>
         <div className="main-heading"><div><p className="eyebrow">POWER BALANCE ANALYZER</p><h1>Find your balance.</h1><p className="lead">See how your left and right legs share the work across every ride.</p></div><div className="heading-spark" aria-hidden="true"><span /><span /><span /><span /><span /><span /><span /></div></div>
         <section className="control-panel" aria-label="Analysis options">
-          <div className="control-top"><div className="mode-control"><span className="control-label">GROUP BY</span><div className="segmented" role="group" aria-label="Group by"><button type="button" data-testid="group-by-power" aria-label="Group by power" aria-pressed={options.group_by === 'power'} className={options.group_by === 'power' ? 'active' : ''} onClick={() => changeOption('group_by', 'power')}>Power</button><button type="button" data-testid="group-by-time" aria-label="Group by time" aria-pressed={options.group_by === 'time'} className={options.group_by === 'time' ? 'active' : ''} onClick={() => changeOption('group_by', 'time')}>Time</button></div></div>
+          <div className="control-top"><div className="mode-control"><span className="control-label">GROUP BY</span><div className="segmented" role="group" aria-label="Group by"><button type="button" data-testid="group-by-power" aria-label="Group by power" aria-pressed={options.group_by === 'power'} className={options.group_by === 'power' ? 'active' : ''} onClick={() => changeOption('group_by', 'power')}>Power</button><button type="button" data-testid="group-by-time" aria-label="Group by time" aria-pressed={options.group_by === 'time'} className={options.group_by === 'time' ? 'active' : ''} onClick={() => changeOption('group_by', 'time')}>Time</button><button type="button" data-testid="group-by-cadence" aria-label="Group by cadence" aria-pressed={options.group_by === 'cadence'} className={options.group_by === 'cadence' ? 'active' : ''} onClick={() => changeOption('group_by', 'cadence')}>Cadence</button></div></div>
             <div className="filter-controls">
               <NumberControl label="Min watts" testId="min-watts" value={options.min_watts} onChange={(value) => changeOption('min_watts', value)} unit="W" />
               <NumberControl label="Max watts" testId="max-watts" value={options.max_watts} onChange={(value) => changeOption('max_watts', value)} unit="W" />
-              <NumberControl label={options.group_by === 'power' ? 'Bucket size' : 'Time bucket'} testId="bucket-size" value={options.group_by === 'power' ? options.bucket_size : options.time_bucket_minutes} onChange={(value) => changeOption(options.group_by === 'power' ? 'bucket_size' : 'time_bucket_minutes', value)} unit={options.group_by === 'power' ? 'W' : 'min'} min={1} />
+              <NumberControl label={options.group_by === 'power' ? 'Bucket size' : options.group_by === 'cadence' ? 'Cadence bucket' : 'Time bucket'} testId="bucket-size" value={bucketValue} onChange={(value) => changeOption(bucketKey, value)} unit={options.group_by === 'power' ? 'W' : options.group_by === 'cadence' ? 'rpm' : 'min'} min={1} />
               <NumberControl label="Min datapoints" testId="min-datapoints" value={options.min_datapoints} onChange={(value) => changeOption('min_datapoints', value)} min={1} />
               <NumberControl label="Seconds / point" testId="sample-seconds" value={options.sample_seconds} onChange={(value) => changeOption('sample_seconds', value)} unit="s" min={1} />
             </div>
@@ -303,14 +313,17 @@ export default function App() {
 
         {trail.length > 0 && <div className="drill-bar"><span className="drill-icon" aria-hidden="true">↳</span><span><strong>{trail.at(-1)?.group_by === 'power' ? `Power ${options.min_watts ?? 0}–${options.max_watts ?? '∞'} W` : `Time ${options.min_minute ?? 0}–${options.max_minute ?? '∞'} min`}</strong> <span className="drill-context">grouped by {options.group_by}</span></span><div className="drill-actions"><button className="text-button" data-testid="drill-back" onClick={back}>← Back</button><button className="text-button" data-testid="drill-clear" onClick={clearDrill}>Clear</button></div></div>}
 
+        <PowerPhaseChart phases={phases} label={phaseLabel} pinned={pinnedPhases} onPin={() => setPinnedPhases({ phases, label: phaseLabel })} onUnpin={() => setPinnedPhases(null)} />
+
         <section className="results-section" aria-label="Power balance results">
           <div className="results-header"><div><p className="eyebrow">ANALYSIS</p><h2>Your power split</h2></div><div className="export-actions"><button className="button button-quiet" data-testid="copy-json" onClick={() => void copyJson()}>Copy JSON</button><button className="button button-quiet" data-testid="download-csv" onClick={exportCsv}>↓ CSV</button></div></div>
           <div className="summary-card"><div className="balance-total"><div className="balance-numbers"><div><span className="leg-dot left-dot" />Left <strong>{result.overall_left_pct == null ? '—' : `${result.overall_left_pct.toFixed(2)}%`}</strong></div><div><span className="leg-dot right-dot" />Right <strong>{result.overall_right_pct == null ? '—' : `${result.overall_right_pct.toFixed(2)}%`}</strong></div></div><div className="split-bar" role="img" aria-label={`Overall balance: ${result.overall_left_pct ?? 0}% left and ${result.overall_right_pct ?? 0}% right`}><span style={{ width: `${result.overall_left_pct ?? 50}%` }} /><span style={{ width: `${result.overall_right_pct ?? 50}%` }} /></div></div><div className="summary-divider" /><div className="summary-stat"><span>DATAPOINTS</span><strong>{result.total_datapoints.toLocaleString()}</strong></div><div className="summary-stat"><span>RIDES USED</span><strong>{result.files_analyzed}</strong></div><div className="summary-stat"><span>TOTAL TIME</span><strong>{formatDuration(result.total_datapoints * options.sample_seconds)}</strong></div></div>
 
-          <div className="table-heading"><div><h3>{options.group_by === 'power' ? 'Balance by power' : 'Balance by elapsed time'}</h3><span>{result.buckets.length ? `${result.buckets.length} buckets · use the drill-down buttons to explore` : 'Waiting for matching samples'}</span></div><div className="legend"><span><i className="left-dot" />Left</span><span><i className="right-dot" />Right</span></div></div>
-          <div className="table-wrap"><table aria-label="Power balance buckets"><thead><tr><th scope="col">{options.group_by === 'power' ? 'POWER RANGE' : 'ELAPSED TIME'}</th><th scope="col">LEFT</th><th scope="col">BALANCE</th><th scope="col">RIGHT</th><th scope="col">POINTS</th><th scope="col">DURATION</th><th scope="col"><span className="sr-only">Drill down</span></th></tr></thead><tbody>
-            {result.buckets.map((row) => { const range = row[options.group_by === 'power' ? 'watts' : 'minutes']!; const lo = range[0]; const hi = range[1]; const unreliable = row.datapoints < Math.max(options.min_datapoints * 1.5, 10); const leftBalance = row.left_pct == null ? 'unavailable' : `${row.left_pct.toFixed(2)}%`; const rightBalance = row.right_pct == null ? 'unavailable' : `${row.right_pct.toFixed(2)}%`; return <tr key={`${lo}-${hi}`} data-testid="bucket-row" data-bucket-lo={lo} data-bucket-hi={hi} data-axis={options.group_by} className={unreliable ? 'is-unreliable' : ''}>
-              <th scope="row">{options.group_by === 'power' ? `${lo}–${hi} W` : `${lo}–${hi} min`}</th><td className="pct-cell left-text">{row.left_pct == null ? '—' : `${row.left_pct.toFixed(2)}%`}</td><td><div className="mini-bar" role="img" aria-label={`Left balance ${leftBalance}; right balance ${rightBalance}`}><span style={{ width: `${row.left_pct ?? 50}%` }} /><span style={{ width: `${row.right_pct ?? 50}%` }} /></div></td><td className="pct-cell right-text">{row.right_pct == null ? '—' : `${row.right_pct.toFixed(2)}%`}</td><td className="points-cell">{row.datapoints.toLocaleString()} {unreliable && <span className="unreliable-dot" title="Few datapoints; treat as less reliable" aria-label="Few datapoints" />}</td><td className="duration-cell">{row.duration}</td><td className="row-arrow"><button type="button" className="drill-button" aria-label={`Show ${options.group_by === 'power' ? 'elapsed-time' : 'power'} buckets for ${lo} to ${hi} ${options.group_by === 'power' ? 'watts' : 'minutes'}`} onClick={() => drillDown(options.group_by, lo, hi)}>↗</button></td>
+
+          <div className="table-heading"><div><h3>{options.group_by === 'power' ? 'Balance by power' : options.group_by === 'cadence' ? 'Balance by cadence' : 'Balance by elapsed time'}</h3><span>{result.buckets.length ? (options.group_by === 'cadence' ? 'Average power per cadence bucket' : 'Select a bucket row to explore') : 'Waiting for matching samples'}</span></div><div className="legend"><span><i className="left-dot" />Left</span><span><i className="right-dot" />Right</span></div></div>
+          <div className="table-wrap"><table aria-label="Power balance buckets"><thead><tr><th scope="col">{options.group_by === 'power' ? 'POWER RANGE' : options.group_by === 'cadence' ? 'CADENCE RANGE' : 'ELAPSED TIME'}</th><th scope="col">LEFT</th><th scope="col">BALANCE</th><th scope="col">RIGHT</th>{options.group_by !== 'power' && <th scope="col">AVG POWER</th>}{options.group_by !== 'cadence' && <th scope="col">AVG CADENCE</th>}<th scope="col">POINTS</th><th scope="col">DURATION</th></tr></thead><tbody>
+            {result.buckets.map((row) => { const range = row[options.group_by === 'power' ? 'watts' : options.group_by === 'cadence' ? 'rpm' : 'minutes']!; const lo = range[0]; const hi = range[1]; const unreliable = row.datapoints < Math.max(options.min_datapoints * 1.5, 10); const leftBalance = row.left_pct == null ? 'unavailable' : `${row.left_pct.toFixed(2)}%`; const rightBalance = row.right_pct == null ? 'unavailable' : `${row.right_pct.toFixed(2)}%`; const drill = () => drillDown(options.group_by, lo, hi); return <tr key={`${lo}-${hi}`} data-testid="bucket-row" data-bucket-lo={lo} data-bucket-hi={hi} data-axis={options.group_by} className={`bucket-row${unreliable ? ' is-unreliable' : ''}`} tabIndex={options.group_by === 'cadence' ? undefined : 0} aria-label={options.group_by === 'cadence' ? undefined : `Show ${options.group_by === 'power' ? 'elapsed-time' : 'power'} buckets for ${lo} to ${hi} ${options.group_by === 'power' ? 'watts' : 'minutes'}`} onClick={drill} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); drill(); } }}>
+              <th scope="row">{options.group_by === 'power' ? `${lo}–${hi} W` : options.group_by === 'cadence' ? `${lo}–${hi} rpm` : `${lo}–${hi} min`}</th><td className="pct-cell left-text">{row.left_pct == null ? '—' : `${row.left_pct.toFixed(2)}%`}</td><td><div className="mini-bar" role="img" aria-label={`Left balance ${leftBalance}; right balance ${rightBalance}`}><span style={{ width: `${row.left_pct ?? 50}%` }} /><span style={{ width: `${row.right_pct ?? 50}%` }} /></div></td><td className="pct-cell right-text">{row.right_pct == null ? '—' : `${row.right_pct.toFixed(2)}%`}</td>{options.group_by !== 'power' && <td className="points-cell">{row.avg_power == null ? '—' : `${row.avg_power.toFixed(1)} W`}</td>}{options.group_by !== 'cadence' && <td className="points-cell">{row.avg_cadence == null ? '—' : `${row.avg_cadence.toFixed(1)} rpm`}</td>}<td className="points-cell">{row.datapoints.toLocaleString()} {unreliable && <span className="unreliable-dot" title="Few datapoints; treat as less reliable" aria-label="Few datapoints" />}</td><td className="duration-cell">{row.duration}</td>
             </tr>; })}
             {!result.buckets.length && <tr className="empty-row"><td colSpan={7}><div className="table-empty"><div className="empty-chart" aria-hidden="true"><span /><span /><span /><span /><span /></div><strong>{result.message ?? NO_BUCKETS}</strong><span>Try selecting rides with dual-sided power data, or adjust the filters.</span></div></td></tr>}
           </tbody></table></div>

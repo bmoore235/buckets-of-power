@@ -3,7 +3,7 @@ import { analyze, bucketByPower, bucketByTime, decodeBalance } from '../src/anal
 import type { AnalysisOptions, DataPoint, WorkoutSummary } from '../src/types';
 
 const options: AnalysisOptions = {
-  group_by: 'power', bucket_size: 25, time_bucket_minutes: 30, min_watts: null, max_watts: null,
+  group_by: 'power', bucket_size: 25, time_bucket_minutes: 30, cadence_bucket_size: 10, min_watts: null, max_watts: null,
   min_datapoints: 1, sample_seconds: 1, min_minute: null, max_minute: null,
 };
 function point(power: number | null, balance: number | null, seconds = 0): DataPoint {
@@ -60,5 +60,13 @@ describe('time buckets', () => {
     expect(result.buckets[0]).toMatchObject({ watts: [200, 225], left_pct: 25, right_pct: 75, datapoints: 2, duration: '00:00:06' });
     expect(result.overall_left_pct).toBe(25);
     expect(result.total_duration).toBe('00:00:06');
+  });
+});
+describe('cadence grouping', () => {
+  it('buckets by cadence and reports average power and cadence', () => {
+    const ride = workout([{ ...point(200, 50), cadence: 85 }, { ...point(300, 50, 1), cadence: 89 }, { ...point(100, 50, 2), cadence: 95 }]);
+    const result = analyze([ride], { ...options, group_by: 'cadence' });
+    expect(result.buckets[0]).toMatchObject({ rpm: [80, 90], avg_power: 250, avg_cadence: 87, datapoints: 2 });
+    expect(result.buckets[1]).toMatchObject({ rpm: [90, 100], avg_power: 100 });
   });
 });
